@@ -1,86 +1,178 @@
-
-
-#include <stdio.h>
-#include <stdlib.h>
 #include "uxn.h"
-#include "err_code.h"
 
-char * getKernelSource(char *filename);
+# include <stdio.h>
 
-int uxn_boot(Uxn *u, Uint8 *ram, cl_context context, cl_command_queue queue, cl_device_id deviceId, cl_mem memU, int ram_pages){
+#define T s->dat[s->ptr - 1]
+#define N s->dat[s->ptr - 2]
+#define L s->dat[s->ptr - 3]
 
-    char * kernelSource;    // kernel source string
 
-    cl_mem memRam = NULL;
-    cl_program program = NULL;
+#define HALT(c) { return uxn_halt(u, ins, (c), *pc - 1); }
+#define PUT(o, v) { s->dat[(Uint8)(s->ptr - 1 - (o))] = (v); }
+#define SET(mul, add) { if(mul > s->ptr) HALT(1) tmp = (mul & k) + add + s->ptr; if(tmp > 254) HALT(2) s->ptr = tmp; }
+
+#define DEO(a, b) { u->dev[(a)] = (b); if((deo_mask[(a) >> 4] >> ((a) & 0xf)) & 0x1) uxn_deo(u, (a)); }
+#define DEI(a, b) { PUT((a), ((dei_mask[(b) >> 4] >> ((b) & 0xf)) & 0x1) ? uxn_dei(u, (b)) : u->dev[(b)]) }
+
+
+int uxn_boot(
+        Uxn *u,
+        Uint8 *ram){
+
+    u->ram = ram;
+
+
     cl_kernel kernel = NULL;
     cl_int ret;
 
-    // Create memory buffers for input and output
-    memRam = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(Uint8) * 0x10000 * ram_pages,NULL,&ret);
+    cl_uint num_devices;
+    clGetContextInfo(env.context, CL_CONTEXT_NUM_DEVICES, sizeof(cl_uint), &num_devices, NULL);
 
-    ret = clEnqueueWriteBuffer(queue,memU,CL_TRUE,0,sizeof(Uxn),u,0,NULL,NULL);
-    ret = clEnqueueWriteBuffer(queue,memRam,CL_TRUE,0,sizeof(Uint8) * 0x10000 * ram_pages,ram,0,NULL,NULL);
 
-    // Create a program from the kernel source
-    kernelSource = getKernelSource("./uxn.cl");
-    program = clCreateProgramWithSource(context, 1, (const char **)&kernelSource, NULL, &ret);
-    checkError(ret, "Creating program with uxn.cl");
+    // Create memory buffers for all properties of the structure
+    uxn_m.dev = clCreateBuffer(env.context, CL_MEM_READ_WRITE,sizeof(u->dev), NULL,&ret);
 
-    free(kernelSource);
+    uxn_m.wst = clCreateBuffer(env.context, CL_MEM_READ_WRITE, sizeof(u->wst), NULL,&ret);
+    uxn_m.rst = clCreateBuffer(env.context, CL_MEM_READ_WRITE, sizeof(u->rst), NULL,&ret);
+    uxn_m.ram = clCreateBuffer(env.context, CL_MEM_READ_WRITE, 0x10000 * 0x10 * sizeof(Uint8), NULL,&ret);
 
-    // Build the program
-    ret = clBuildProgram(program, 0, NULL, NULL, NULL, NULL);
-    if (ret != CL_SUCCESS)
-    {
-        size_t len;
-        char buffer[2048];
-
-        printf("Error: Failed to build program executable!\n%s\n", err_code(ret));
-        clGetProgramBuildInfo(program, deviceId, CL_PROGRAM_BUILD_LOG, sizeof(buffer), buffer, &len);
-        printf("%s\n", buffer);
-        return EXIT_FAILURE;
-    }
+    // Write buffer for this uxn_boot
+    write_uxn_to_gpu(&env,u,&uxn_m);
 
 
     // Create the OpenCL kernel
-    kernel = clCreateKernel(program, "uxn_boot", &ret);
+    ret = create_kernel("./uxn.cl","uxn_boot",&kernel,&env);
 
-    checkError(ret, "Creating kernel from uxn.cl");
 
-    ret = clSetKernelArg(kernel, 0 , sizeof(cl_mem),(void *)&memU);
-    ret |= clSetKernelArg(kernel, 1, sizeof(cl_mem), (void *)&memRam);
+    // set function arg
+    ret = clSetKernelArg(kernel, 0 , sizeof(cl_mem),&uxn_m.dev);
+    ret |= clSetKernelArg(kernel, 1 , sizeof(cl_mem),&uxn_m.wst);
+    ret |= clSetKernelArg(kernel, 2 , sizeof(cl_mem),&uxn_m.rst);
 
-    checkError(ret, "Setting kernel args");
 
-    size_t globalSize = 0x10000 * ram_pages;
-    ret = clEnqueueNDRangeKernel(queue, kernel, 1 ,NULL, &globalSize, NULL,0,NULL,NULL);
-    checkError(ret, "Enqueueing kernel");
+    // run OpenCl device function uxn_boot
+    size_t globalSize = sizeof(Stack) ;
+    ret = clEnqueueNDRangeKernel(env.queue, kernel, 1 ,NULL, &globalSize, NULL,0,NULL,NULL);
 
-    //ret = clEnqueueReadBuffer(queue, memU, CL_TRUE, 0 ,sizeof(Uxn)*1,u,0,NULL,NULL);
+    // test after run
+    // ret = clEnqueueReadBuffer(queue, *memDev, CL_TRUE, 0 ,sizeof(u->dev),u->dev,0,NULL,NULL);
 
     return 1;
 }
 
-char * getKernelSource(char *filename)
-{
-    FILE *file = fopen(filename, "r");
-    if (!file)
-    {
-        fprintf(stderr, "Error: Could not open kernel source file\n");
-        exit(EXIT_FAILURE);
-    }
-    fseek(file, 0, SEEK_END);
-    int len = ftell(file) + 1;
-    rewind(file);
+int uxn_eval_cpu(Uxn *u, Uint16 *pc){
+    int t, n, l, k, tmp, opc, ins;
+    Uint8 *ram = u->ram;
+    Stack *s, *z;
+    if(!pc || u->dev[0x0f]) return 0;
 
-    char *source = (char *)calloc(sizeof(char), len);
-    if (!source)
-    {
-        fprintf(stderr, "Error: Could not allocate memory for source string\n");
-        exit(EXIT_FAILURE);
+    ins = ram[*pc] & 0xff;
+    *pc = *pc + 1;
+
+    k = ins & 0x80 ? 0xff : 0;
+    s = ins & 0x40 ? &u->rst : &u->wst;
+    opc = !(ins & 0x1f) ? (0 - (ins >> 5)) & 0xff : ins & 0x3f;
+//    printf("opc:%x\n",opc);
+//    printf("%x %x %x\n",T,N,L);
+    switch(opc) {
+        /* IMM */
+        case 0x00: /* BRK   */ return 0;
+        case 0x16: /* DEI  */ t=T;            SET(1, 0) DEI(0, t) return 1;
+        case 0x36:            t=T;            SET(1, 1) DEI(1, t) DEI(0, t + 1) return 1;
+        case 0x17: /* DEO  */ t=T;n=N;        SET(2,-2) DEO(t, n) return 1;
+        case 0x37:            t=T;n=N;l=L;    SET(3,-3) DEO(t, l) DEO(t + 1, n) return 1;
     }
-    fread(source, sizeof(char), len, file);
-    fclose(file);
-    return source;
+    return 1;
+}
+
+int halt_cpu(Uxn *u, Uint16 *pc, char halt){
+    Uint8 *ram = u->ram;
+    int ins = ram[*pc++] & 0xff;
+    HALT(halt)
+}
+
+int uxn_eval(Uxn *u,
+             Uint16 pc)
+{
+
+
+    cl_kernel kernel = NULL;
+    cl_int ret;
+
+    cl_mem mem_pc = clCreateBuffer(env.context, CL_MEM_READ_WRITE,sizeof(Uint16), NULL,&ret);
+    ret = clEnqueueWriteBuffer(env.queue,mem_pc,CL_TRUE,0,sizeof(Uint16),&pc,0,NULL,NULL);
+
+    Uint16 cord[100];
+    Uint8 result=0;
+    Uint8 halt=0;
+    cl_mem mem_cord = clCreateBuffer(env.context, CL_MEM_READ_WRITE,sizeof(Uint16)*100, NULL,&ret);
+    cl_mem mem_re = clCreateBuffer(env.context, CL_MEM_READ_WRITE,sizeof(Uint8), NULL,&ret);
+    cl_mem mem_halt = clCreateBuffer(env.context, CL_MEM_READ_WRITE,sizeof(Uint8), NULL,&ret);
+
+    ret = clEnqueueWriteBuffer(env.queue,mem_re,CL_TRUE,0,sizeof(Uint8),&result,0,NULL,NULL);
+    ret = clEnqueueWriteBuffer(env.queue,mem_halt,CL_TRUE,0,sizeof(Uint8),&halt,0,NULL,NULL);
+
+
+
+    ret = create_kernel("./uxn.cl","uxn_eval",&kernel,&env);
+
+    // set function arg
+    ret = clSetKernelArg(kernel, 0 , sizeof(cl_mem),&uxn_m.ram);
+    ret |= clSetKernelArg(kernel, 1 , sizeof(cl_mem),&uxn_m.wst);
+    ret |= clSetKernelArg(kernel, 2 , sizeof(cl_mem),&uxn_m.rst);
+    ret |= clSetKernelArg(kernel, 3 , sizeof(cl_mem),&uxn_m.dev);
+    ret |= clSetKernelArg(kernel, 4 , sizeof(cl_mem),&mem_pc);
+    ret |= clSetKernelArg(kernel, 5, sizeof (cl_mem),&mem_re);
+    ret |= clSetKernelArg(kernel, 6, sizeof(cl_mem), &mem_halt);
+    ret |= clSetKernelArg(kernel, 7, sizeof(cl_mem), &mem_cord);
+
+
+
+
+
+    size_t globalSize = 1;
+    int times = 0;
+    for(;;){
+        ++times;
+
+        if(write_uxn_to_gpu(&env,u,&uxn_m))break;
+
+        ret = clEnqueueNDRangeKernel(env.queue, kernel, 1 ,NULL, &globalSize, NULL,0,NULL,NULL);
+
+        read_uxn_from_gpu(&env,u,&uxn_m);
+
+        ret = clEnqueueReadBuffer(env.queue, mem_pc , CL_TRUE, 0 ,sizeof(Uint16),&pc,0,NULL,NULL);
+        ret = clEnqueueReadBuffer(env.queue, mem_halt , CL_TRUE, 0 ,sizeof(Uint8),&halt,0,NULL,NULL);
+        ret = clEnqueueReadBuffer(env.queue, mem_re , CL_TRUE, 0 ,sizeof(Uint8),&result,0,NULL,NULL);
+
+        clFinish(env.queue);
+
+        //if(result >= 100)break;
+        //printf("%d ",result);
+        if(halt != 0) { return halt_cpu(u,&pc,halt);}
+        if(!uxn_eval_cpu(u,&pc)) break;
+
+        ret = clEnqueueWriteBuffer(env.queue,mem_halt,CL_TRUE,0,sizeof(Uint8),&halt,0,NULL,NULL);
+        ret = clEnqueueWriteBuffer(env.queue,mem_pc,CL_TRUE,0,sizeof(Uint16),&pc,0,NULL,NULL);
+        ret = clEnqueueWriteBuffer(env.queue,mem_re,CL_TRUE,0,sizeof(Uint8),&result,0,NULL,NULL);
+
+    }
+
+    ret = clEnqueueReadBuffer(env.queue, mem_cord , CL_TRUE, 0 ,sizeof(Uint16)*100,&cord,0,NULL,NULL);
+//    clFinish(env.queue);
+//    printf("pc : %d\n",pc);
+//    for(int j = 0;j<100;++j){
+//        printf("%d: %x\n",j,cord[j]);
+//    }
+//    printf("\n");
+//
+//    for(int i = 0; i < 10; ++i){
+//        printf("%x %x\n",u->rst.dat[i],u->wst.dat[i]);
+//        // printf("%x ",u->ram[PAGE_PROGRAM + i]);
+//    }
+//    printf("%d %d\n",u->rst.ptr,u->wst.ptr);
+
+
+    return 1;
+
 }

@@ -11,6 +11,66 @@
 char * getKernelSource(char *filename);
 char *err_code (cl_int err_in);
 
+static const char *errors[] = {
+        "underflow",
+        "overflow",
+        "division by zero"};
+
+static void
+system_print(Stack *s, char *name)
+{
+    Uint8 i;
+    fprintf(stderr, "<%s>", name);
+    for(i = 0; i < s->ptr; i++)
+        fprintf(stderr, " %02x", s->dat[i]);
+    if(!i)
+        fprintf(stderr, " empty");
+    fprintf(stderr, "\n");
+}
+
+
+static void
+system_cmd(Uint8 *ram, Uint16 addr)
+{
+    if(ram[addr] == 0x1) {
+        Uint16 i, length = PEEK2(ram + addr + 1);
+        Uint16 a_page = PEEK2(ram + addr + 1 + 2), a_addr = PEEK2(ram + addr + 1 + 4);
+        Uint16 b_page = PEEK2(ram + addr + 1 + 6), b_addr = PEEK2(ram + addr + 1 + 8);
+        int src = (a_page % RAM_PAGES) * 0x10000, dst = (b_page % RAM_PAGES) * 0x10000;
+        for(i = 0; i < length; i++)
+            ram[dst + (Uint16)(b_addr + i)] = ram[src + (Uint16)(a_addr + i)];
+    }
+}
+
+void
+system_inspect(Uxn *u)
+{
+    system_print(&u->wst, "wst");
+    system_print(&u->rst, "rst");
+}
+
+
+void
+system_deo(Uxn *u, Uint8 *d, Uint8 port)
+{
+    switch(port) {
+        case 0x3:
+            system_cmd(u->ram, PEEK2(d + 2));
+            break;
+        case 0x5:
+            if(PEEK2(d + 4)) {
+                Uxn friend;
+                uxn_boot(&friend, u->ram);
+                uxn_eval(&friend, PEEK2(d + 4));
+            }
+            break;
+        case 0xe:
+            system_inspect(u);
+            break;
+    }
+}
+
+
 int system_error(char *msg, const char *err){
     fprintf(stderr, "%s: %s\n", msg, err);
     fflush(stderr);
@@ -18,59 +78,71 @@ int system_error(char *msg, const char *err){
 }
 
 int
-system_load(Uxn *u, char *filename,cl_context context, cl_command_queue queue, cl_device_id deviceId, cl_mem memU)
+uxn_halt(Uxn *u, Uint8 instr, Uint8 err, Uint16 addr)
+{
+    Uint8 *d = &u->dev[0];
+    Uint16 handler = PEEK2(d);
+    if(handler) {
+        u->wst.ptr = 4;
+        u->wst.dat[0] = addr >> 0x8;
+        u->wst.dat[1] = addr & 0xff;
+        u->wst.dat[2] = instr;
+        u->wst.dat[3] = err;
+        return uxn_eval(u, handler);
+    } else {
+        system_inspect(u);
+        fprintf(stderr, "%s %s, by %02x at 0x%04x.\n", (instr & 0x40) ? "Return-stack" : "Working-stack", errors[err - 1], instr, addr);
+    }
+    return 0;
+}
+
+int
+console_input(Uxn *u, char c, int type)
+{
+    Uint8 *d = &u->dev[0x10];
+    d[0x2] = c;
+    d[0x7] = type;
+    return uxn_eval(u, PEEK2(d));
+}
+
+void
+console_deo(Uint8 *d, Uint8 port)
+{
+    switch(port) {
+        case 0x8:
+            fputc(d[port], stdout);
+            fflush(stdout);
+            return;
+        case 0x9:
+            fputc(d[port], stderr);
+            fflush(stderr);
+            return;
+    }
+}
+
+int
+system_load(Uxn *u,
+            char *filename)
 {
 
-    Uint8 *ram = (Uint8 *)calloc(0x10000 * RAM_PAGES, sizeof(Uint8));
     int l, i = 0;
     FILE *f = fopen(filename, "rb");
     if(!f)
         return 0;
-    l = fread(&ram[PAGE_PROGRAM], 0x10000 - PAGE_PROGRAM, 1, f);
+    l = fread(&u->ram[PAGE_PROGRAM], 0x10000 - PAGE_PROGRAM, 1, f);
     while(l && ++i < RAM_PAGES)
-        l = fread(&ram + 0x10000 * i, 0x10000, 1, f);
+        l = fread(&u->ram + 0x10000 * i, 0x10000, 1, f);
     fclose(f);
 
-    char * kernelSource;
 
-    cl_int ret;
-    cl_mem memRam = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(Uint8) * 0x10000 * RAM_PAGES, NULL, &ret);
     // Write into compute device memory
-    ret = clEnqueueWriteBuffer(queue, memRam, CL_TRUE, 0, sizeof(Uint8) * 0x10000 * RAM_PAGES, ram, 0, NULL, NULL);
-
-
-    kernelSource = getKernelSource("./system.cl");
-    cl_program program = clCreateProgramWithSource(context, 1, (const char **)&kernelSource, NULL, &ret);
-    free(kernelSource);
-    ret = clBuildProgram(program, 0, NULL, NULL, NULL, NULL);
-
-    if (ret != CL_SUCCESS)
-    {
-        size_t len;
-        char buffer[2048];
-
-        printf("Error: Failed to build program executable!\n%s\n", err_code(ret));
-        clGetProgramBuildInfo(program, deviceId, CL_PROGRAM_BUILD_LOG, sizeof(buffer), buffer, &len);
-        printf("%s\n", buffer);
-        return EXIT_FAILURE;
-    }
-
-    // Create the OpenCL kernel
-    cl_kernel kernel = clCreateKernel(program, "system_load", &ret);
-
-    ret = clSetKernelArg(kernel, 0 , sizeof(cl_mem),(void *)&memU);
-    ret |= clSetKernelArg(kernel, 1, sizeof(cl_mem), (void *)&memRam);
-
-    size_t globalSize = 0x10000 * RAM_PAGES;
-    ret = clEnqueueNDRangeKernel(queue, kernel, 1 ,NULL, &globalSize, NULL,0,NULL,NULL);
-
-
-    ret = clEnqueueReadBuffer(queue, memU, CL_TRUE, 0 ,sizeof(Uxn)*1+sizeof(Uint8)*0x10000*RAM_PAGES,u,0,NULL,NULL);
-
-    for (int j = 0; j < 10; ++j) {
-        printf("%x\n",u->ram[PAGE_PROGRAM+j]);
-    }
-
+    clEnqueueWriteBuffer(env.queue,uxn_m.ram,CL_TRUE,0, 0x10000 * 0x10 * sizeof(Uint8) ,u->ram,0,NULL,NULL);
+//    printf("ram message: ");
+//    for(int i = 0; i < 10; ++i){
+//        printf("%x ",u->ram[PAGE_PROGRAM + i]);
+//    }
+//
+//    printf("\n");
     return 1;
 }
 

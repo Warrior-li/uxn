@@ -43,6 +43,29 @@ typedef struct Uxn {
     void (*deo)(struct Uxn *u, Uint8 addr);
 } Uxn;
 
+typedef struct Uxn_mem{
+    cl_mem ram,dev;
+    cl_mem wst,rst;
+}Uxn_mem;
+
+typedef struct OpenCL_env{
+    cl_platform_id platformId;
+    cl_uint numPlatforms;
+    cl_uint numDevices;
+    cl_device_id deviceId;
+    cl_context context;
+    cl_command_queue queue;
+}OpenCL_env;
+
+Uxn_mem uxn_m;
+OpenCL_env env;
+
+
+/* functions about openCL */
+
+extern int write_uxn_to_gpu(OpenCL_env *env,Uxn *u, Uxn_mem *uxn_m);
+extern int read_uxn_from_gpu(OpenCL_env *env,Uxn *u, Uxn_mem *uxn_m);
+extern int create_kernel(char *filename,char * fun_nam,cl_kernel *kernel,OpenCL_env *env);
 /* required functions */
 
 extern Uint8 uxn_dei(Uxn *u, Uint8 addr);
@@ -53,7 +76,19 @@ extern Uint16 deo_mask[];
 
 /* built-ins */
 
-int uxn_boot(Uxn *u, Uint8 *ram, cl_context context,cl_command_queue queue, cl_device_id deviceId,cl_mem memU, int ram_pages);
-int uxn_eval(Uxn *u, Uint16 pc);
+
+/*
+ * this function flow:
+ * 1. Create the memory buffer for all properties(*ram, dev[], wst, rst) of the structure.
+ * 2. initial dev[], wst, rst in the OpenCL device
+ * 3. initial *ram in the host
+ * 4. free some space
+ */
+int uxn_boot(// Host variable
+        Uxn *u,
+        Uint8 *ram);
+
+int uxn_eval(Uxn *u,
+             Uint16 pc);
 
 
