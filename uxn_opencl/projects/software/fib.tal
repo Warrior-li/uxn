@@ -1,0 +1,10 @@
+|0100 ( -> ) @reset
+
+    #0000 INC2k ADD2k
+    &loop
+        ( print ) DUP2 ,print JSR
+        ( linebreak ) #0a18 DEO
+        ADD2k LTH2k ,&loop JCN
+    ( halt ) #010f DEO
+
+BRK

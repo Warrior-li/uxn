@@ -1,0 +1,463 @@
+( bunnymark.tal )
+
+( November 2021 // Kira Oakley )
+
+( ----------------- WORD DEFS ---------------- )
+%RAND { ;rand CALL }
+
+( ------------------ MACROS ------------------ ) 
+%RET { JMP2r }
+%CALL { JSR2 }
+%NEG2 { POP #80 AND }
+%POS2 { POP #80 LTH }
+%INT2 { #05 SFT2 }  ( convert fixed-point value to an integer )
+%DEC2 { #0001 SUB2 }
+%DEC { #01 SUB }
+%TOS { #00 SWP }  ( converts a byte TO a Short )
+%HALT { #0000 .Screen/vector DEO2 BRK }
+%MOD2 { DIV2k MUL2 SUB2 }
+
+( constants )
+%SPRITE-SIZE { #0008 }
+
+( sprite struct accessors )
+%sprite-x { LDA2 }
+%sprite-y { #0002 ADD2 LDA2 }
+%sprite-xvel { #0004 ADD2 LDA2 }
+%sprite-yvel { #0006 ADD2 LDA2 }
+%set-sprite-x { STA2 }
+%set-sprite-y { #0002 ADD2 STA2 }
+%set-sprite-xvel { #0004 ADD2 STA2 }
+%set-sprite-yvel { #0006 ADD2 STA2 }
+
+( ------------------ DEVICES ----------------- ) 
+|00 @System [ &vector $2 &pad $6 &r $2 &g $2 &b $2 &debug $1 &halt $1 ]
+|20 @Screen [ &vector $2 &width $2 &height $2 &pad  $2 &x $2 &y $2 &addr $2 &pixel $1 &sprite $1 ]
+|90 @Mouse  [ &vector $2 &x $2 &y $2 &state $1 &wheel $1 ]
+|c0 @Date   [ &year $2 &month $1 &day $1 &hour $1 &minute $1 &second $1 &dotw $1 &doty $2 &isdst $1 ]
+
+( ---------------- MAIN PROGRAM --------------- ) 
+|0100
+;init CALL
+BRK
+
+( ---------------- SUBROUTINES ---------------- ) 
+@init ( --- )
+  ( set system colors )
+  #2ce9 .System/r DEO2
+  #01c0 .System/g DEO2
+  #2ce5 .System/b DEO2
+
+  ( interrupts )
+  ;on-frame .Screen/vector DEO2
+
+  ( draw "FPS:" and "BUNNIES:" and instructions labels )
+  .Screen/width DEI2 #0046 SUB2 #0008 ;text/fps #42 ;draw-string-uf1 CALL
+  #0004 #0008 ;text/bunnies #42 ;draw-string-uf1 CALL
+  [ .Screen/width DEI2 #0002 DIV2 #0050 SUB2 ] #0008 ;text/instructions #43 ;draw-string-uf1 CALL
+  #0028 #0008 #0000 ;draw-number CALL
+
+  ( seed prng )
+  #04 ;rand/a STA
+RET
+
+@on-frame ( -- [IRQ] )
+  ;draw CALL
+
+  ( frames++ ) ;var/frames LDA2 INC2 ;var/frames STA2
+  .Date/second DEI [ ;var/last-secs LDA ] EQU ,&post-fps-update JCN
+
+  ( fps update )
+  ( update last-secs ) .Date/second DEI ;var/last-secs STA
+  ( update fps label ) .Screen/width DEI2 #002b SUB2 #0008 [ ;var/frames LDA2 ] ;draw-number CALL
+  ( reset frames counter ) #0000 ;var/frames STA2
+
+  &post-fps-update
+    ( mouse input to add/remove bunnies )
+    .Mouse/state DEI #01 EQU ,&add JCN
+    .Mouse/state DEI #10 EQU ,&remove JCN
+    ,&done JMP
+  &add
+    ;add-bunny CALL ,&done JMP
+  &remove
+    ;remove-bunny CALL ,&done JMP
+  &done
+BRK
+
+@draw-string-uf1 ( x* y* text* color -- )
+  STH
+  SWP2 .Screen/y DEO2
+  SWP2 .Screen/x DEO2
+
+  &loop
+    ( load the next character )
+    [ LDAk TOS ]
+
+    ( multiply it by 8 to get # of bytes, add 0x0100 (size of width section), and
+      the font's data address. this makes up the data location of that character's
+      pixel data. )
+    #30 SFT2 ;font/glyphs ADD2 .Screen/addr DEO2
+
+    ( draw )
+      ( subtle text shadow effect :3 ) ( OVR2 #0001 ADD2 OVR2 #0001 ADD2 ;&string #43 ;draw-string-uf1 CALL )
+    STHrk .Screen/sprite DEO
+
+    ( get the character's pixel width and move to the right by the width of
+      the character )
+    [ LDAk TOS ] ;font/start ADD2 LDA TOS
+    .Screen/x DEI2 ADD2 .Screen/x DEO2
+
+    ( move to next character address )
+    INC2
+
+    ( keep looping until the null character (00) is read )
+    LDAk #00 EQU ,&bail JCN
+    ,&loop JMP
+  &bail
+  POP2
+  STHr POP
+RET
+
+@draw-number ( x* y* num* -- )
+  #06 JMP
+  ( &string 20 20 20 20 20 00 )
+  &string 31 32 33 34 35 00
+
+  ( reset string data )
+  #2020 ;&string STA2
+  #2020 ;&string #0002 ADD2 STA2
+  #2000 ;&string #0004 ADD2 STA2
+
+  LITr 04  ( string position counter. starts at 4 because this
+              byte-to-string algorithm fills in the string backwards. )
+
+  ( 1. mod 10 => current right-most decimal digit )
+  ( 2. div 10 => moves the whole thing over to the right )
+  ( 3. repeat until step #2 returns #0000 )
+  &loop
+    ( ascii value of digit ) [ [ DUP2 #000a MOD2 ] NIP #30 ADD ]
+    ( write char to string ) STHkr TOS ;&string ADD2 STA
+    ( divide by 10 ) #000a DIV2
+    ( update pos counter ) LITr 01 SUBr
+    #0000 NEQ2k NIP NIP ,&loop JCN
+
+  POP2
+  STHr POP
+  OVR2 OVR2 ;&string #40 ;draw-string-uf1 CALL
+  ;&string #45 ;draw-string-uf1 CALL
+RET
+
+@add-bunny ( -- )
+  ;sprite/length LDA2
+
+  ( cap bunny count at 65535 )
+  DUP2 #ffff EQU2 ,&bail JCN 
+
+  ( compute the offset to the beginning of this new bunny's data )
+  DUP2 SPRITE-SIZE MUL2 ;sprite/array ADD2
+
+  ( populate the new bunny's x/y/xvel/yvel with random values )
+  #00 RAND OVR2 set-sprite-x
+  [ RAND #1f AND ] [ RAND ] OVR2 set-sprite-y
+  #00 [ RAND #7f AND ] OVR2 set-sprite-xvel
+  #00 [ RAND #7f AND ] OVR2 set-sprite-yvel
+  ( pop ptr to bunny data ) POP2
+
+  ( write new increased array length )
+  INC2 DUP2 ;sprite/length STA2
+
+  ( update label )
+  STH2k #0028 #0008 STH2r ;draw-number CALL
+
+  &bail
+  ( pop sprite/length ) POP2
+RET
+
+@remove-bunny
+  ;sprite/length LDA2
+
+  ( don't let length go below 0 )
+  DUP2 #0000 EQU2 ,&bail JCN
+
+  ( clear the old sprite location )
+  DUP2 DEC2 SPRITE-SIZE MUL2 ;sprite/array ADD2
+    ( top )
+  [ DUP2 sprite-x ] INT2 .Screen/x DEO2
+  [ DUP2 sprite-y ] INT2 .Screen/y DEO2
+  ;sprite/data .Screen/addr DEO2
+    ( bottom )
+  #00 .Screen/sprite DEO
+  [ DUP2 sprite-y ] INT2 #0008 ADD2 .Screen/y DEO2
+  ;sprite/data #0010 ADD2 .Screen/addr DEO2
+  #00 .Screen/sprite DEO
+  POP2
+
+  DEC2 DUP2 ;sprite/length STA2
+
+  ( update label )
+  STH2k #0028 #0008 STH2r ;draw-number CALL
+
+  &bail
+    POP2
+RET
+
+@draw ( -- )
+  ( loop from 0 to ;sprite/length to make all ;draw-bunny calls )
+  [ ;sprite/length LDA2 ] #0000
+  &loop
+    EQU2k ,&bail JCN
+    DUP2 ;draw-bunny CALL
+    INC2
+    ,&loop JMP
+  &bail
+    POP2 POP2
+RET
+
+@draw-bunny ( idx -- )
+  ( compute the offset to the beginning of this bunny's data )
+  [ SPRITE-SIZE MUL2 ;sprite/array ADD2 ]
+
+  ( clear the old sprite location )
+    ( top )
+  [ DUP2 sprite-x ] INT2 .Screen/x DEO2
+  [ DUP2 sprite-y ] INT2 .Screen/y DEO2
+  ;sprite/data .Screen/addr DEO2
+    ( bottom )
+  #00 .Screen/sprite DEO
+  [ DUP2 sprite-y ] INT2 #0008 ADD2 .Screen/y DEO2
+  ;sprite/data #0010 ADD2 .Screen/addr DEO2
+  #00 .Screen/sprite DEO
+
+  ( move the sprite by its velocity )
+  [ DUP2 sprite-x ] [ OVR2 sprite-xvel ] ADD2 OVR2 set-sprite-x
+  [ DUP2 sprite-y ] [ OVR2 sprite-yvel ] ADD2 OVR2 set-sprite-y
+
+  ( check for right wall collision + bounce x )
+  [ DUP2 sprite-xvel ] NEG2 ,&skip-max-x JCN
+  [ DUP2 sprite-x ] INT2 #0008 ADD2 [ .Screen/width DEI2 ] LTH2 ,&skip-max-x JCN
+  [ DUP2 sprite-xvel ] #ffff MUL2 [ OVR2 set-sprite-xvel ]
+  &skip-max-x
+  ( check for bottom wall collision + bounce y )
+  [ DUP2 sprite-yvel ] NEG2 ,&skip-max-y JCN
+  [ DUP2 sprite-y ] INT2 #0008 ADD2 [ .Screen/height DEI2 ] LTH2 ,&skip-max-y JCN
+  [ DUP2 sprite-yvel ] #ffff MUL2 [ OVR2 set-sprite-yvel ]
+  &skip-max-y
+  ( check for left wall collision + bounce x )
+  [ DUP2 sprite-x ] POS2 ,&skip-min-x JCN
+  [ DUP2 sprite-xvel ] #ffff MUL2 [ OVR2 set-sprite-xvel ]
+  &skip-min-x
+  ( check for top wall collision + bounce x )
+  [ DUP2 sprite-y ] POS2 ,&skip-min-y JCN
+  [ DUP2 sprite-yvel ] #ffff MUL2 [ OVR2 set-sprite-yvel ]
+  &skip-min-y
+
+  ( apply gravity )
+  [ DUP2 sprite-yvel ] #0004 ADD2 OVR2 set-sprite-yvel
+
+  ( draw the sprite )
+  (   top )
+  [ DUP2 sprite-x ] INT2 .Screen/x DEO2
+  [ DUP2 sprite-y ] INT2 .Screen/y DEO2
+  ;sprite/data .Screen/addr DEO2
+  #85 .Screen/sprite DEO
+  (   bottom )
+  [ DUP2 sprite-y ] INT2 #0008 ADD2 .Screen/y DEO2
+  ;sprite/data #0010 ADD2 .Screen/addr DEO2
+  #85 .Screen/sprite DEO
+
+  POP2
+RET
+
+( PRNG code taken from flappy.tal -- thanks! )
+@rand ( -- number )
+  ( local vars )
+  #04 JMP
+  &x $1 &y $1 &z $1 &a $1
+
+  ( 8-bit PRNG https://github.com/edrosten/8bit_rng )
+  ( t = x ^ (x << 4) )
+  ,&x LDR DUP #40 SFT EOR
+  ( x = y )
+  ,&y LDR ,&x STR
+  ( y = z )
+  ,&z LDR ,&y STR
+  ( z = a )
+  ,&a LDR DUP ,&z STR
+  ( a = z ^ t ^ (z >> 1) ^ (t << 1) )
+  DUP #10 SFT EOR SWP DUP #01 SFT EOR EOR
+  DUP ,&a STR
+RET
+
+( -------------------- DATA ------------------- ) 
+( static vars for fps calculation )
+@var
+  &frames 0000
+  &last-secs 00
+
+( static string data )
+@text
+  &fps "FPS: 00
+  &bunnies "BUNS: 00
+  &instructions "CLICK 20 "TO 20 "ADD 20 "BUNNIES! 00
+
+( static font data )
+@font
+  ( atari8.uf1 )
+  &start
+    0808 0808 0808 0808 0808 0808 0808 0808
+    0808 0808 0808 0808 0808 0808 0808 0808
+    0804 0808 0808 0804 0808 0808 0508 0808
+    0808 0808 0808 0808 0808 0405 0708 0708
+    0808 0808 0808 0808 0806 0808 0808 0808
+    0808 0808 0808 0808 0808 0806 0806 0808
+    0508 0807 0808 0708 0806 0608 0608 0808
+    0808 0808 0808 0808 0808 0807 0407 0708
+    0808 0808 0808 0807 0808 0808 0807 0808
+    0808 0808 0808 0808 0808 0808 0808 0808
+    0808 0808 0808 0808 0808 0808 0808 0808
+    0808 0808 0808 0808 0808 0605 0808 0808
+    0808 0808 0808 0805 0608 0806 0708 0806
+    0708 0808 0707 0807 0507 0808 0708 0808
+    0808 0808 0808 0808 0808 0808 0808 0808
+    0808 0808 0808 0808 0807 0408 0707 0707
+  &glyphs
+    0000 0000 0000 0000 183c 66c3 e724 243c
+    3c24 24e7 c366 3c18 181c f683 83f6 1c18
+    1838 6fc1 c16f 3818 3c99 c3e7 c399 3c00
+    ffff fefc f9f3 e700 e7c3 993c 99c3 e700
+    0103 068c d870 2000 7ec3 d3d3 dbc3 c37e
+    183c 3c3c 7e10 3810 181c 1610 1070 f060
+    f0c0 fed8 de18 1800 f0c0 dfdb ff1e 1b00
+    0505 050d 0d19 7971 a0a0 a0b0 b098 9e8e
+    7cc6 c600 c6c6 7c00 0606 0600 0606 0600
+    7c06 067c c0c0 7c00 7c06 067c 0606 7c00
+    c6c6 c67c 0606 0600 7cc0 c07c 0606 7c00
+    7cc0 c07c c6c6 7c00 7c06 0600 0606 0600
+    7cc6 c67c c6c6 7c00 7cc6 c67c 0606 7c00
+    0000 3c06 7e66 3c00 7860 7860 7e18 1e00
+    070f 1f18 1810 1e17 f0f8 ec04 0404 3c54
+    110b 0d06 072e 3938 0428 d828 d010 e000
+    0000 0000 0000 0000 6060 6060 6000 6000
+    6666 6600 0000 0000 006c fe6c 6cfe 6c00
+    183e 603c 067c 1800 0066 6c18 3066 4600
+    386c 3870 decc 7600 6060 6000 0000 0000
+    0e1c 1818 181c 0e00 7038 1818 1838 7000
+    0066 3cff 3c66 0000 0018 187e 1818 0000
+    0000 0000 0030 3060 0000 007e 0000 0000
+    0000 0000 0018 1800 0206 0c18 3060 4000
+    3c66 6e76 6666 3c00 1838 1818 1818 7e00
+    3c66 060c 1830 7e00 7e0c 180c 0666 3c00
+    0c1c 3c6c 7e0c 0c00 7e60 7c06 0666 3c00
+    3c60 607c 6666 3c00 7e06 0c18 3030 3000
+    3c66 663c 6666 3c00 3c66 663e 060c 3800
+    0060 6000 6060 0000 0030 3000 3030 6000
+    0c18 3060 3018 0c00 0000 7e00 007e 0000
+    6030 180c 1830 6000 3c66 060c 1800 1800
+    3c66 6e6a 6e60 3e00 183c 6666 7e66 6600
+    7c66 667c 6666 7c00 3c66 6060 6066 3c00
+    786c 6666 666c 7800 7e60 607c 6060 7e00
+    7e60 607c 6060 6000 3e60 606e 6666 3e00
+    6666 667e 6666 6600 7830 3030 3030 7800
+    0606 0606 0666 3c00 666c 7870 786c 6600
+    6060 6060 6060 7e00 c6ee fed6 c6c6 c600
+    6676 7e7e 6e66 6600 3c66 6666 6666 3c00
+    7c66 667c 6060 6000 3c66 6666 766c 3600
+    7c66 667c 6c66 6600 3c66 603c 0666 3c00
+    7e18 1818 1818 1800 6666 6666 6666 3e00
+    6666 6666 663c 1800 c6c6 c6d6 feee c600
+    6666 3c18 3c66 6600 6666 663c 1818 1800
+    7e06 0c18 3060 7e00 7860 6060 6060 7800
+    4060 3018 0c06 0200 7818 1818 1818 7800
+    1038 6cc6 0000 0000 0000 0000 0000 fe00
+    00c0 6030 0000 0000 0000 3c06 3e66 3e00
+    6060 7c66 6666 7c00 0000 3c60 6060 3c00
+    0606 3e66 6666 3e00 0000 3c66 7e60 3c00
+    1c30 7c30 3030 3000 0000 3e66 663e 067c
+    6060 7c66 6666 6600 3000 7030 3030 7800
+    1800 1818 1818 1870 6060 666c 786c 6600
+    7030 3030 3030 7800 0000 ecfe d6c6 c600
+    0000 7c66 6666 6600 0000 3c66 6666 3c00
+    0000 7c66 6666 7c60 0000 3e66 6666 3e06
+    0000 7c66 6060 6000 0000 3e60 3c06 7c00
+    0018 7e18 1818 0e00 0000 6666 6666 3e00
+    0000 6666 663c 1800 0000 c6c6 d67c 6c00
+    0000 663c 183c 6600 0000 6666 663e 067c
+    0000 7e0c 1830 7e00 1c30 3060 3030 1c00
+    6060 6060 6060 6060 7018 180c 1818 7000
+    0060 f29e 0c00 0000 0018 1834 3462 7e00
+    003c 6660 663c 0838 6600 0066 6666 3e00
+    0c18 003c 7e60 3c00 1866 003c 067e 3e00
+    6600 3c06 3e66 3e00 3018 003c 067e 3e00
+    1818 003c 067e 3e00 0000 3c60 603c 0818
+    1866 003c 7e60 3c00 6600 3c66 7e60 3c00
+    3018 003c 7e60 3c00 6600 0038 1818 3c00
+    1866 0038 1818 3c00 6030 0038 1818 3c00
+    6600 183c 667e 6600 1800 183c 667e 6600
+    0c18 7e60 7c60 7e00 0000 7e1b 7fd8 7e00
+    3f78 d8de f8d8 df00 1866 003c 6666 3c00
+    6600 003c 6666 3c00 3018 003c 6666 3c00
+    1866 0066 6666 3e00 3018 0066 6666 3e00
+    6600 6666 663e 067c 6600 3c66 6666 3c00
+    6600 6666 6666 3e00 1818 3c60 603c 1818
+    1c3a 307c 3030 7e00 6666 3c18 3c18 1800
+    1c36 667c 6666 7c60 1e30 7c30 3030 6000
+    0c18 003c 067e 3e00 0c18 0038 1818 3c00
+    0c18 003c 6666 3c00 0c18 0066 6666 3e00
+    3458 007c 6666 6600 3458 0066 766e 6600
+    003c 063e 663e 003c 003c 6666 663c 003c
+    0018 0018 3060 663c 0000 003e 3030 3000
+    0000 007c 0c0c 0c00 c6cc d836 6bc3 860f
+    c6cc d836 6ed6 9f06 0018 0018 1818 1818
+    1b36 6cd8 6c36 1b00 d86c 361b 366c d800
+    3458 003c 067e 3e00 3458 003c 6666 3c00
+    023c 666e 7666 3c40 0002 3c6e 7666 3c40
+    0000 7edb dfd8 7e00 7fd8 d8de d8d8 7f00
+    3018 0018 3c66 7e66 3458 0018 3c66 7e66
+    3458 3c66 6666 663c 6600 0000 0000 0000
+    1830 6000 0000 0000 0020 7020 2020 0000
+    7aca caca 7a0a 0a0a 7ec3 bdb1 b1bd c37e
+    7ec3 bda5 b9ad c37e f15b 5f55 5100 0000
+    6600 e666 66f6 061c f666 6666 66f6 061c
+    0066 763c 6e66 0000 007c 0c0c 0c7e 0000
+    001e 060e 1e36 0000 007e 0c0c 0c0c 0000
+    007c 0666 6666 0000 0070 3030 3030 0000
+    0078 3018 1818 0000 007e 3636 3636 0000
+    606e 6666 667e 0000 0078 1818 0000 0000
+    007c 0c0c 0c7c 0000 607e 0606 060e 0000
+    006c 3e66 666e 0000 0038 1818 1878 0000
+    007c 6c6c 6c38 0000 0036 3636 367e 0000
+    007e 6676 067e 0000 0066 663c 0e7e 0000
+    007c 0c6c 6c68 6000 0078 0c0c 0c0c 0000
+    00d6 d6d6 d6fe 0000 007c 6c6c 6cec 0000
+    0070 3030 3030 3000 007c 0c0c 0c0c 0c00
+    00fe 6666 667e 0000 007e 6676 0606 0600
+    006c 6c38 1818 1800 0e1b 3c66 663c d870
+    0010 386c c682 0000 66f7 9999 ef66 0000
+    0000 76dc c8dc 7600 1c36 667c 6666 7c60
+    00fe 6662 6060 60f8 0000 fe6c 6c6c 6c48
+    fe66 3018 3066 fe00 001e 386c 6c6c 3800
+    0000 6c6c 6c6c 7fc0 0000 7e18 1818 1810
+    3c18 3c66 663c 183c 003c 667e 6666 3c00
+    003c 6666 6624 6600 1c36 78dc ccec 7800
+    0c18 3854 5438 3060 0010 7cd6 d6d6 7c10
+    3e70 607e 6070 3e00 3c66 6666 6666 6600
+    007e 007e 007e 0000 1818 7e18 1800 7e00
+    3018 0c18 3000 7e00 0c18 3018 0c00 7e00
+    000e 1b1b 1818 1818 1818 1818 d8d8 7000
+    1818 007e 0018 1800 0032 4c00 324c 0000
+    386c 3800 0000 0000 387c 3800 0000 0000
+    0000 0000 6060 0000 0000 0f18 d870 3000
+    386c 6c6c 6c00 0000 386c 1830 7c00 0000
+    780c 380c 7800 0000 00fe 0000 0000 0000
+
+( beginning of sprite pixel data + array )
+@sprite
+  &data
+    2466 6600 2424 003c 4200 007e 7e7e 7e7e
+    1818 3c3c 1800 0000 ff66 4242 667e 4242
+  &length 0000
+  &array
+    &x 0600
+    &y 0500
+    &xvel 0060
+    &yvel 0010
