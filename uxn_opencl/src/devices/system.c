@@ -131,8 +131,6 @@ system_load(Uxn *u,
     fclose(f);
 
 
-    clEnqueueWriteBuffer(env.queue,uxn_m.ram,CL_TRUE,0, 0x10000 * 0x10 * sizeof(Uint8) ,u->ram,0,NULL,NULL);
-
     return 1;
 }
 

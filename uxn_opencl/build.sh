@@ -88,8 +88,10 @@ if [ $install = 1 ]
 then
 	cp bin/uxnemu bin/uxnasm bin/uxncli $HOME/bin/
 fi
-
+./bin/uxnasm projects/software/bunnymark.tal bin/bunnymark.rom
 ./bin/uxnasm projects/examples/exercises/fib.tal bin/fib.rom
+./bin/uxnasm projects/examples/exercises/stencil.tal bin/stencil.rom
+./bin/uxnasm projects/examples/exercises/primes.tal bin/primes.rom
 ./bin/uxnasm projects/software/launcher.tal bin/launcher.rom
 ./bin/uxnasm projects/software/asma.tal bin/asma.rom
 
@@ -98,4 +100,4 @@ if [ $norun = 1 ]; then exit; fi
 ./bin/uxnasm projects/software/piano.tal bin/piano.rom
 
 cd bin
-./uxncli fib.rom
+./uxnemu bunnymark.rom

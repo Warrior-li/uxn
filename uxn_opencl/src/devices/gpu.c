@@ -56,23 +56,8 @@ char * getKernelSource(char *filename)
     return source;
 }
 
-int read_uxn_from_gpu(OpenCL_env *env,Uxn *u, Uxn_mem *uxn_m){
-    cl_int ret;
-    ret = clEnqueueReadBuffer(env->queue, uxn_m->dev, CL_TRUE, 0 ,sizeof(u->dev),&u->dev,0,NULL,NULL);
-    ret |= clEnqueueReadBuffer(env->queue, uxn_m->wst, CL_TRUE, 0 ,sizeof(u->wst),&u->wst,0,NULL,NULL);
-    ret |= clEnqueueReadBuffer(env->queue, uxn_m->rst, CL_TRUE, 0 ,sizeof(u->rst),&u->rst,0,NULL,NULL);
-    ret |= clEnqueueReadBuffer(env->queue, uxn_m->ram, CL_TRUE, 0 ,0x10000 * 0x10 * sizeof(Uint8),u->ram,0,NULL,NULL);
-    return ret;
-}
 
-int write_uxn_to_gpu(OpenCL_env *env,Uxn *u, Uxn_mem *uxn_m){
-    cl_int ret;
-    ret = clEnqueueWriteBuffer(env->queue,uxn_m->dev,CL_TRUE,0,sizeof(u->dev),&u->dev,0,NULL,NULL);
-    ret |= clEnqueueWriteBuffer(env->queue,uxn_m->wst,CL_TRUE,0,sizeof(u->wst),&u->wst,0,NULL,NULL);
-    ret |= clEnqueueWriteBuffer(env->queue,uxn_m->rst,CL_TRUE,0,sizeof(u->rst),&u->rst,0,NULL,NULL);
-    ret |= clEnqueueWriteBuffer(env->queue,uxn_m->ram,CL_TRUE,0, 0x10000 * 0x10 * sizeof(Uint8) ,u->ram,0,NULL,NULL);
-    return ret;
-}
+
 
 int create_kernel(char *filename,char * fun_nam,cl_kernel *kernel,OpenCL_env *env){
     char * kernelSource;

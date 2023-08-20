@@ -112,6 +112,7 @@ void
 uxn_deo(Uxn *u, Uint8 addr)
 {
     Uint8 p = addr & 0x0f, d = addr & 0xf0;
+    printf("%d %x\n",p,d);
     switch(d) {
         case 0x00:
             system_deo(u, &u->dev[d], p);
@@ -538,5 +539,6 @@ main(int argc, char **argv)
     close(0); /* make stdin thread exit */
 #endif
     SDL_Quit();
+    uxn_free();
     return 0;
 }

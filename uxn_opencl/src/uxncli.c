@@ -65,7 +65,6 @@ main(int argc, char **argv){
         return system_error("Load", "Failed");
 
     u.dev[0x17] = argc - i;
-    read_uxn_from_gpu(&env,&u,&uxn_m);
 
 
 
@@ -82,11 +81,14 @@ main(int argc, char **argv){
         }
     }
 
+
     end_time = clock();
 
 
     run_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
     printf("运行时间: %f 秒\n", run_time);
+
+    uxn_free();
 
     return u.dev[0x0f] & 0x7f;
 

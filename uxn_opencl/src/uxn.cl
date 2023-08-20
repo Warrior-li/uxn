@@ -10,60 +10,54 @@
 #define L2 PEEK2(s->dat + s->ptr - 6)
 
 
-#define HALT(c) { *halt = c; return; }
+#define HALT(c) { buffer[ptr].aa = c; buffer[ptr].type = 3; ptr = ptr+1; EXIT}
 #define SET(mul, add) { if(mul > s->ptr) HALT(1) tmp = (mul & k) + add + s->ptr; if(tmp > 254) HALT(2) s->ptr = tmp; }
 #define PUT(o, v) { s->dat[(char)(s->ptr - 1 - (o))] = (v); }
 #define PUT2(o, v) { tmp = (v); s->dat[(char)(s->ptr - o - 2)] = tmp >> 8; s->dat[(char)(s->ptr - o - 1)] = tmp; }
 #define PUSH(x, v) { z = (x); if(z->ptr > 254) HALT(2) z->dat[z->ptr++] = (v); }
 #define PUSH2(x, v) { z = (x); if(z->ptr > 253) HALT(2) tmp = (v); z->dat[z->ptr] = tmp >> 8; z->dat[z->ptr + 1] = tmp; z->ptr += 2; }
-#define EXIT {*pca = pc-1; return;}
+#define DEO(a, b) { buffer[ptr].aa = a; buffer[ptr].bb = b; buffer[ptr].type = 2; ptr = ptr+1; }
+#define DEI(a, b) { buffer[ptr].aa = a; buffer[ptr].bb = b; buffer[ptr].type = 1; ptr = ptr+1; }
+#define EXIT { *result = ptr; *pca = pc; return;}
 
 typedef struct Stack {
     unsigned char dat[255], ptr;
 }Stack;
 
+typedef struct Buffer{
+    unsigned char aa;
+    unsigned char bb;
+    unsigned char type;
+}Buffer;
 
 
-__kernel void uxn_boot(
-        __global unsigned char *dev,
-        __global Stack *wst,
-        __global Stack *rst
-        )
-{
-    unsigned int i = get_global_id(0);
-    __global unsigned char *wptr = (__global unsigned char *) wst;
-    __global unsigned char *rptr = (__global unsigned char *) rst;
-    if( i < 256 ) dev[i] = 0;
-    if( i < 256 ) {wptr[i] = 0; rptr[i] = 0;}
 
-}
 
 
 __kernel void uxn_eval(
         __global unsigned char *ram,
         __global Stack *wst,
         __global Stack *rst,
-        __global unsigned char *dev,
         __global unsigned short *pca,
-        __global unsigned char *result,
-        __global unsigned char *halt,
-        __global unsigned short *cord
+        __global unsigned short *max_ptr,
+        __global Buffer *buffer,
+        __global bool *flag,
+        __global unsigned short *result
         )
 {
-    int t,n,l,k,tmp,ins,opc;
-    unsigned short pc =  *pca;
+    int t,n,l,k,tmp,ins,opc,ptr = 0;
+    unsigned short pc = *pca;
+    if(*flag == true) {*flag = false; EXIT}
     __global Stack *s,*z;
-    if(!pc || dev[0x0f])return;
     for(;;){
+        if( ptr + 2 >= *max_ptr) { EXIT }
         ins = ram[pc++] & 0xff;
         k = ins & 0x80 ? 0xff : 0;
         s = ins & 0x40 ? rst : wst;
         opc = !(ins & 0x1f) ? (0 - (ins >> 5)) & 0xff : ins & 0x3f;
-        *result = *result + 1;
-        cord[*result] = !!s->dat[s->ptr-1] * PEEK2(ram + pc) + 2;
         switch(opc) {
             /* IMM */
-            case 0x00: /* BRK   */ EXIT
+            case 0x00: /* BRK   */ pc = pc-1; buffer[ptr].type = 4; ptr = ptr + 1; EXIT
             case 0xff: /* JCI   */ pc += !!s->dat[--s->ptr] * PEEK2(ram + pc) + 2; break;
             case 0xfe: /* JMI   */ pc += PEEK2(ram + pc) + 2; break;
             case 0xfd: /* JSI   */ PUSH2(rst, pc + 2) pc += PEEK2(ram + pc) + 2; break;
@@ -114,10 +108,10 @@ __kernel void uxn_eval(
             case 0x34:            t=T2;           SET(2, 0) PUT2(0, PEEK2(ram + t)) break;
             case 0x15: /* STA  */ t=T2;n=L;       SET(3,-3) ram[t] = n; break;
             case 0x35:            t=T2;n=N2;      SET(4,-4) POKE2(ram + t, n) break;
-            case 0x16: /* DEI  */ EXIT
-            case 0x36:            EXIT
-            case 0x17: /* DEO  */ EXIT
-            case 0x37:            EXIT
+            case 0x16: /* DEI  */ t=T;            SET(1, 0) DEI(0, t) *flag = true; EXIT
+            case 0x36:            t=T;            SET(1, 1) DEI(1, t) DEI(0, t + 1) *flag = true; EXIT
+            case 0x17: /* DEO  */ t=T;n=N;        SET(2,-2) DEO(t, n) break;
+            case 0x37:            t=T;n=N;l=L;    SET(3,-3) DEO(t, l) DEO(t + 1, n) break;
             case 0x18: /* ADD  */ t=T;n=N;        SET(2,-1) PUT(0, n + t) break;
             case 0x38:            t=T2;n=N2;      SET(4,-2) PUT2(0, n + t) break;
             case 0x19: /* SUB  */ t=T;n=N;        SET(2,-1) PUT(0, n - t) break;

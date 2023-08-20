@@ -19,6 +19,7 @@ WITH REGARD TO THIS SOFTWARE.
 
 #define PAGE_PROGRAM 0x0100
 
+#define buffer_num 32
 /* clang-format off */
 
 #define POKE2(d, v) { (d)[0] = (v) >> 8; (d)[1] = (v); }
@@ -43,10 +44,17 @@ typedef struct Uxn {
     void (*deo)(struct Uxn *u, Uint8 addr);
 } Uxn;
 
-typedef struct Uxn_mem{
-    cl_mem ram,dev;
-    cl_mem wst,rst;
-}Uxn_mem;
+typedef struct Buffer{
+    Uint8 a;
+    Uint8 b;
+    Uint8 type;
+}Buffer;
+
+typedef struct Buffer_queue{
+    Buffer queue[buffer_num];
+    Uint16 ptr;
+}Buffer_queue;
+
 
 typedef struct OpenCL_env{
     cl_platform_id platformId;
@@ -57,14 +65,18 @@ typedef struct OpenCL_env{
     cl_command_queue queue;
 }OpenCL_env;
 
-Uxn_mem uxn_m;
+Buffer_queue bufferA,bufferB;
 OpenCL_env env;
+cl_mem mWst,mRst,mRam;
+cl_mem mBufferA, mBufferB;
+cl_mem mPc,mNum,mFlag;
+cl_mem ptrA,ptrB;
+
 
 /* functions about openCL */
 
-extern int write_uxn_to_gpu(OpenCL_env *env,Uxn *u, Uxn_mem *uxn_m);
-extern int read_uxn_from_gpu(OpenCL_env *env,Uxn *u, Uxn_mem *uxn_m);
 extern int create_kernel(char *filename,char * fun_nam,cl_kernel *kernel,OpenCL_env *env);
+
 /* required functions */
 
 extern Uint8 uxn_dei(Uxn *u, Uint8 addr);
@@ -90,4 +102,5 @@ int uxn_boot(
 int uxn_eval(Uxn *u,
              Uint16 pc);
 
+int uxn_free();
 
