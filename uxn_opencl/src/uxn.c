@@ -77,11 +77,10 @@ int uxn_eval(Uxn *u,
 
     size_t globalSize = 1;
 
-
-    clEnqueueWriteBuffer(env.queue,mPc,CL_TRUE,0,sizeof(Uint16),&pc,0,NULL,NULL);
+    clEnqueueWriteBuffer(env.queue,mPc,CL_TRUE,0,sizeof(pc),&pc,0,NULL,NULL);
 
     Uint16 b_num = buffer_num;
-    clEnqueueWriteBuffer(env.queue,mNum,CL_TRUE,0,sizeof(Uint16),&b_num,0,NULL,NULL);
+    clEnqueueWriteBuffer(env.queue,mNum,CL_TRUE,0,sizeof(b_num),&b_num,0,NULL,NULL);
 
 
     bool dei_flag = false;
@@ -91,7 +90,6 @@ int uxn_eval(Uxn *u,
     clEnqueueWriteBuffer(env.queue,mWst,CL_TRUE,0,sizeof(Stack),&u->wst,0,NULL,NULL);
     clEnqueueWriteBuffer(env.queue,mRst,CL_TRUE,0,sizeof(Stack),&u->rst,0,NULL,NULL);
     clEnqueueWriteBuffer(env.queue,mRam,CL_TRUE,0,0x10000 * 0x10 * sizeof(Uint8),u->ram,0,NULL,NULL);
-
 
     int flag = 0,times = 0;
 
@@ -117,6 +115,8 @@ int uxn_eval(Uxn *u,
             clEnqueueNDRangeKernel(env.queue, kernel, 1 ,NULL, &globalSize, NULL, 0 , NULL , NULL);
 
         }else if(kernel_end[!flag] == true){
+            clEnqueueReadBuffer(env.queue,mWst,CL_TRUE, 0, sizeof(u->wst),&u->wst,0,NULL,NULL);
+            clEnqueueReadBuffer(env.queue,mRst,CL_TRUE, 0, sizeof(u->rst),&u->rst,0,NULL,NULL);
             clEnqueueReadBuffer(env.queue,mRam,CL_TRUE, 0, 0x10000 * 0x10 * sizeof(Uint8),u->ram,0,NULL,NULL);
             return 1;
         }
@@ -129,21 +129,23 @@ int uxn_eval(Uxn *u,
 
             Buffer_queue buffer = flag ? bufferA : bufferB;
 
+            Stack s;
+            int ins = 0;
+
             for(i = 0; i < buffer.ptr;++i){
 
                 switch (buffer.queue[i].type) {
-                    case 4: kernel_end[!flag] = true;
+                    case 4: kernel_end[!flag] = true; break;
                     case 2:
                         DEO(buffer.queue[i].a,buffer.queue[i].b)
                         break;
                     case 1:
                     {
-                        Stack s;
-                        int ins;
+                        Uint16 pc_copy;
                         if(i != 0 && buffer.queue[i-1].type != 1) {
                             clEnqueueReadBuffer(env.queue,mRam,CL_TRUE,0,0x10000 * 0x10 * sizeof(Uint8),u->ram,0,NULL,NULL);
-                            clEnqueueReadBuffer(env.queue, mPc, CL_TRUE, 0, sizeof(Uint16), &pc, 0, NULL, NULL);
-                            ins = u->ram[pc - 1] & 0xff & 0x40;
+                            clEnqueueReadBuffer(env.queue, mPc, CL_TRUE, 0, sizeof(Uint16), &pc_copy, 0, NULL, NULL);
+                            ins = u->ram[pc_copy - 1] & 0xff & 0x40;
                             clEnqueueReadBuffer(env.queue, ins ? mRst : mWst, CL_TRUE, 0, sizeof(Stack),
                                                 &s, 0, NULL, NULL);
                         }

@@ -86,7 +86,7 @@ main(int argc, char **argv){
 
 
     run_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
-    printf("运行时间: %f 秒\n", run_time);
+    printf("running times: %f s\n", run_time);
 
     uxn_free();
 

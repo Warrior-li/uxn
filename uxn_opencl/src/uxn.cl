@@ -57,7 +57,7 @@ __kernel void uxn_eval(
         opc = !(ins & 0x1f) ? (0 - (ins >> 5)) & 0xff : ins & 0x3f;
         switch(opc) {
             /* IMM */
-            case 0x00: /* BRK   */ pc = pc-1; buffer[ptr].type = 4; ptr = ptr + 1; EXIT
+            case 0x00: /* BRK   */ --pc; buffer[ptr].type = 4; ptr++; EXIT
             case 0xff: /* JCI   */ pc += !!s->dat[--s->ptr] * PEEK2(ram + pc) + 2; break;
             case 0xfe: /* JMI   */ pc += PEEK2(ram + pc) + 2; break;
             case 0xfd: /* JSI   */ PUSH2(rst, pc + 2) pc += PEEK2(ram + pc) + 2; break;

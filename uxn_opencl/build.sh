@@ -100,4 +100,4 @@ if [ $norun = 1 ]; then exit; fi
 ./bin/uxnasm projects/software/piano.tal bin/piano.rom
 
 cd bin
-./uxnemu bunnymark.rom
+./uxncli fib.rom

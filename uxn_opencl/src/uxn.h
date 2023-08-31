@@ -19,7 +19,7 @@ WITH REGARD TO THIS SOFTWARE.
 
 #define PAGE_PROGRAM 0x0100
 
-#define buffer_num 32
+#define buffer_num 128
 /* clang-format off */
 
 #define POKE2(d, v) { (d)[0] = (v) >> 8; (d)[1] = (v); }
